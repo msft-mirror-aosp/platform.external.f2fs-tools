@@ -4,6 +4,9 @@ cc_defaults {
         "-D_FILE_OFFSET_BITS=64",
         "-Wno-unused-function",
     ],
+    include_dirs: [
+       "external/f2fs-tools/include/",
+    ],
 }
 
 cc_binary {
