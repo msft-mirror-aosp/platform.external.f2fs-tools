@@ -7,8 +7,6 @@
 #define HAVE_POSIX_ACL_H 1
 #define HAVE_LINUX_TYPES_H 1
 #define HAVE_LINUX_XATTR_H 1
-#define HAVE_LINUX_FS_H 1
-#define HAVE_LINUX_FIEMAP_H 1
 #define HAVE_MNTENT_H 1
 #define HAVE_STDLIB_H 1
 #define HAVE_STRING_H 1
@@ -29,7 +27,6 @@
 #define HAVE_LSEEK64 1
 #define HAVE_MEMSET 1
 #define HAVE_SETMNTENT 1
-#define HAVE_LIBLZ4 1
 
 #ifdef WITH_SLOAD
 #define HAVE_LIBSELINUX 1
@@ -56,7 +53,6 @@
 #define HAVE_GETMNTENT 1
 #define HAVE_LLSEEK 1
 #define HAVE_MEMSET 1
-#define HAVE_LIBLZ4 1
 
 #ifdef WITH_SLOAD
 #define HAVE_LIBSELINUX 1
