@@ -43,9 +43,9 @@ cc_defaults {
     name: "f2fs-tools-defaults",
     cflags: [
         "-DF2FS_MAJOR_VERSION=1",
-        "-DF2FS_MINOR_VERSION=14",
-        "-DF2FS_TOOLS_VERSION=\"1.14.0\"",
-        "-DF2FS_TOOLS_DATE=\"2020-08-24\"",
+        "-DF2FS_MINOR_VERSION=15",
+        "-DF2FS_TOOLS_VERSION=\"1.15.0\"",
+        "-DF2FS_TOOLS_DATE=\"2022-05-20\"",
         "-DWITH_ANDROID",
         "-Wall",
         "-Werror",
@@ -61,11 +61,6 @@ cc_defaults {
         "include",
         "mkfs",
         "fsck",
-    ],
-    include_dirs: [
-        "external/e2fsprogs/lib/",
-        "external/e2fsprogs/lib/uuid",
-        "system/core/libsparse/include",
     ],
     target: {
         windows: {
@@ -83,6 +78,9 @@ cc_defaults {
         "mkfs/f2fs_format_utils.c",
         "lib/libf2fs_zoned.c",
         "lib/nls_utf8.c",
+    ],
+    static_libs: [
+        "libext2_uuid",
     ],
 }
 
