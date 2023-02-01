@@ -18,6 +18,9 @@
 #ifndef O_LARGEFILE
 #define O_LARGEFILE 0
 #endif
+#ifndef __SANE_USERSPACE_TYPES__
+#define __SANE_USERSPACE_TYPES__       /* For PPC64, to get LL64 types */
+#endif
 
 #include <errno.h>
 #include <fcntl.h>
@@ -40,7 +43,7 @@
 #include <unistd.h>
 
 #ifdef HAVE_CONFIG_H
-#include "config.h"
+#include <config.h>
 #endif
 #include <android_config.h>
 
@@ -132,22 +135,23 @@ static void full_write(int fd, const void *buf, size_t count)
 	}
 }
 
-#if defined(__APPLE__)
+#ifdef HAVE_MACH_TIME_H
 static u64 get_current_us()
 {
-#ifdef HAVE_MACH_TIME_H
 	return mach_absolute_time() / 1000;
-#else
-	return 0;
-#endif
 }
-#else
+#elif defined(HAVE_CLOCK_GETTIME) && defined(HAVE_CLOCK_BOOTTIME)
 static u64 get_current_us()
 {
 	struct timespec t;
 	t.tv_sec = t.tv_nsec = 0;
 	clock_gettime(CLOCK_BOOTTIME, &t);
 	return (u64)t.tv_sec * 1000000LL + t.tv_nsec / 1000;
+}
+#else
+static u64 get_current_us()
+{
+	return 0;
 }
 #endif
 
@@ -504,22 +508,25 @@ static void do_erase(int argc, char **argv, const struct cmd_desc *cmd)
 "  rand          : random numbers\n"			\
 "IO can be\n"						\
 "  buffered      : buffered IO\n"			\
-"  dio           : direct IO\n"				\
+"  dio           : O_DIRECT\n"				\
+"  dsync         : O_DIRECT | O_DSYNC\n"		\
 "  osync         : O_SYNC\n"				\
 "  atomic_commit : atomic write & commit\n"		\
 "  atomic_abort  : atomic write & abort\n"		\
-"{delay} is in ms unit and optional only for atomic_commit and atomic_abort\n"
+"  atomic_rcommit: atomic replace & commit\n"	\
+"  atomic_rabort : atomic replace & abort\n"	\
+"{delay} is in ms unit and optional only for atomic operations\n"
 
 static void do_write(int argc, char **argv, const struct cmd_desc *cmd)
 {
-	u64 buf_size = 0, inc_num = 0, ret = 0, written = 0;
+	u64 buf_size = 0, inc_num = 0, written = 0;
 	u64 offset;
 	char *buf = NULL;
 	unsigned bs, count, i;
 	int flags = 0;
 	int fd;
 	u64 total_time = 0, max_time = 0, max_time_t = 0;
-	bool atomic_commit = false, atomic_abort = false;
+	bool atomic_commit = false, atomic_abort = false, replace = false;
 	int useconds = 0;
 
 	srand(time(0));
@@ -546,24 +553,39 @@ static void do_write(int argc, char **argv, const struct cmd_desc *cmd)
 	else if (strcmp(argv[4], "inc_num") && strcmp(argv[4], "rand"))
 		die("Wrong pattern type");
 
-	if (!strcmp(argv[5], "dio"))
+	if (!strcmp(argv[5], "dio")) {
 		flags |= O_DIRECT;
-	else if (!strcmp(argv[5], "osync"))
+	} else if (!strcmp(argv[5], "dsync")) {
+		flags |= O_DIRECT | O_DSYNC;
+	} else if (!strcmp(argv[5], "osync")) {
 		flags |= O_SYNC;
-	else if (!strcmp(argv[5], "atomic_commit"))
+	} else if (!strcmp(argv[5], "atomic_commit")) {
 		atomic_commit = true;
-	else if (!strcmp(argv[5], "atomic_abort"))
+	} else if (!strcmp(argv[5], "atomic_abort")) {
 		atomic_abort = true;
-	else if (strcmp(argv[5], "buffered"))
+	} else if (!strcmp(argv[5], "atomic_rcommit")) {
+		atomic_commit = true;
+		replace = true;
+	} else if (!strcmp(argv[5], "atomic_rabort")) {
+		atomic_abort = true;
+		replace = true;
+	} else if (strcmp(argv[5], "buffered")) {
 		die("Wrong IO type");
+	}
 
 	fd = xopen(argv[6], O_CREAT | O_WRONLY | flags, 0755);
 
 	if (atomic_commit || atomic_abort) {
+		int ret;
+
 		if (argc == 8)
 			useconds = atoi(argv[7]) * 1000;
 
-		ret = ioctl(fd, F2FS_IOC_START_ATOMIC_WRITE);
+		if (replace)
+			ret = ioctl(fd, F2FS_IOC_START_ATOMIC_REPLACE);
+		else
+			ret = ioctl(fd, F2FS_IOC_START_ATOMIC_WRITE);
+
 		if (ret < 0) {
 			fputs("setting atomic file mode failed\n", stderr);
 			exit(1);
@@ -572,6 +594,8 @@ static void do_write(int argc, char **argv, const struct cmd_desc *cmd)
 
 	total_time = get_current_us();
 	for (i = 0; i < count; i++) {
+		uint64_t ret;
+
 		if (!strcmp(argv[4], "inc_num"))
 			*(int *)buf = inc_num++;
 		else if (!strcmp(argv[4], "rand"))
@@ -592,12 +616,16 @@ static void do_write(int argc, char **argv, const struct cmd_desc *cmd)
 		usleep(useconds);
 
 	if (atomic_commit) {
+		int ret;
+
 		ret = ioctl(fd, F2FS_IOC_COMMIT_ATOMIC_WRITE);
 		if (ret < 0) {
 			fputs("committing atomic write failed\n", stderr);
 			exit(1);
 		}
 	} else if (atomic_abort) {
+		int ret;
+
 		ret = ioctl(fd, F2FS_IOC_ABORT_VOLATILE_WRITE);
 		if (ret < 0) {
 			fputs("aborting atomic write failed\n", stderr);
@@ -1255,6 +1283,33 @@ static void do_rename(int argc, char **argv, const struct cmd_desc *cmd)
 	exit(0);
 }
 
+#define gc_desc "trigger filesystem GC"
+#define gc_help "f2fs_io gc sync_mode [file_path]\n\n"
+
+static void do_gc(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	u32 sync;
+	int ret, fd;
+
+	if (argc != 3) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	sync = atoi(argv[1]);
+
+	fd = xopen(argv[2], O_RDONLY, 0);
+
+	ret = ioctl(fd, F2FS_IOC_GARBAGE_COLLECT, &sync);
+	if (ret < 0)
+		die_errno("F2FS_IOC_GARBAGE_COLLECT failed");
+
+	printf("trigger %s gc ret=%d\n",
+		sync ? "synchronous" : "asynchronous", ret);
+	exit(0);
+}
+
 #define CMD_HIDDEN 	0x0001
 #define CMD(name) { #name, do_##name, name##_desc, name##_help, 0 }
 #define _CMD(name) { #name, do_##name, NULL, NULL, CMD_HIDDEN }
@@ -1286,6 +1341,7 @@ const struct cmd_desc cmd_list[] = {
 	CMD(compress),
 	CMD(get_filename_encrypt_mode),
 	CMD(rename),
+	CMD(gc),
 	{ NULL, NULL, NULL, NULL, 0 }
 };
 
