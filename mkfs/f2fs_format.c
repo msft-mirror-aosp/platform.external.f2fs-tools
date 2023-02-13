@@ -454,7 +454,7 @@ static int f2fs_prepare_super_block(void)
 		 * not overlap to metadata area.
 		 */
 		for (i = 1; i < c.ndevs; i++) {
-			if (c.devices[i].zoned_model == F2FS_ZONED_HM &&
+			if (c.devices[i].zoned_model != F2FS_ZONED_NONE &&
 				c.devices[i].start_blkaddr < get_sb(main_blkaddr)) {
 				MSG(0, "\tError: Conventional device %s is too small,"
 					" (%"PRIu64" MiB needed).\n", c.devices[0].path,
@@ -467,7 +467,8 @@ static int f2fs_prepare_super_block(void)
 
 	total_zones = get_sb(segment_count) / (c.segs_per_zone) -
 							total_meta_zones;
-
+	if (total_zones == 0)
+		goto too_small;
 	set_sb(section_count, total_zones * c.secs_per_zone);
 
 	set_sb(segment_count_main, get_sb(section_count) * c.segs_per_sec);
@@ -483,7 +484,7 @@ static int f2fs_prepare_super_block(void)
 		c.overprovision = get_best_overprovision(sb);
 
 	c.reserved_segments =
-			(2 * (100 / c.overprovision + 1) + NR_CURSEG_TYPE) *
+			(100 / c.overprovision + 1 + NR_CURSEG_TYPE) *
 			round_up(f2fs_get_usable_segments(sb), get_sb(section_count));
 
 	if (c.feature & cpu_to_le32(F2FS_FEATURE_RO)) {
@@ -497,8 +498,7 @@ static int f2fs_prepare_super_block(void)
 			c.sector_size < zone_align_start_offset) ||
 		(get_sb(segment_count_main) - NR_CURSEG_TYPE) <
 						c.reserved_segments) {
-		MSG(0, "\tError: Device size is not sufficient for F2FS volume\n");
-		return -1;
+		goto too_small;
 	}
 
 	if (c.vol_uuid) {
@@ -544,10 +544,10 @@ static int f2fs_prepare_super_block(void)
 	}
 
 	if (c.feature & cpu_to_le32(F2FS_FEATURE_RO)) {
-		c.cur_seg[CURSEG_HOT_NODE] = 0;
+		c.cur_seg[CURSEG_HOT_NODE] = last_section(last_zone(total_zones));
 		c.cur_seg[CURSEG_WARM_NODE] = 0;
 		c.cur_seg[CURSEG_COLD_NODE] = 0;
-		c.cur_seg[CURSEG_HOT_DATA] = 1;
+		c.cur_seg[CURSEG_HOT_DATA] = 0;
 		c.cur_seg[CURSEG_COLD_DATA] = 0;
 		c.cur_seg[CURSEG_WARM_DATA] = 0;
 	} else if (c.heap) {
@@ -612,6 +612,10 @@ static int f2fs_prepare_super_block(void)
 	}
 
 	return 0;
+
+too_small:
+	MSG(0, "\tError: Device size is not sufficient for F2FS volume\n");
+	return -1;
 }
 
 static int f2fs_init_sit_area(void)
@@ -760,8 +764,12 @@ static int f2fs_write_check_point_pack(void)
 	set_cp(overprov_segment_count, (f2fs_get_usable_segments(sb) -
 			get_cp(rsvd_segment_count)) *
 			c.overprovision / 100);
+
+	if (get_cp(overprov_segment_count) < get_cp(rsvd_segment_count))
+		set_cp(overprov_segment_count, get_cp(rsvd_segment_count));
+
 	set_cp(overprov_segment_count, get_cp(overprov_segment_count) +
-			get_cp(rsvd_segment_count));
+			2 * get_sb(segs_per_sec));
 
 	if (f2fs_get_usable_segments(sb) <= get_cp(overprov_segment_count)) {
 		MSG(0, "\tError: Not enough segments to create F2FS Volume\n");
