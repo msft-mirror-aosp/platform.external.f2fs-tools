@@ -150,7 +150,7 @@ safe_resize:
 		c.new_overprovision = get_best_overprovision(sb);
 
 	c.new_reserved_segments =
-		(2 * (100 / c.new_overprovision + 1) + 6) *
+		(100 / c.new_overprovision + 1 + NR_CURSEG_TYPE) *
 						get_sb(segs_per_sec);
 
 	if ((get_sb(segment_count_main) - 2) < c.new_reserved_segments ||
@@ -175,7 +175,7 @@ static void migrate_main(struct f2fs_sb_info *sbi, unsigned int offset)
 
 	ASSERT(raw != NULL);
 
-	for (i = TOTAL_SEGS(sbi) - 1; i >= 0; i--) {
+	for (i = MAIN_SEGS(sbi) - 1; i >= 0; i--) {
 		se = get_seg_entry(sbi, i);
 		if (!se->valid_blocks)
 			continue;
@@ -240,7 +240,7 @@ static void migrate_ssa(struct f2fs_sb_info *sbi,
 	block_t new_sum_blkaddr = get_newsb(ssa_blkaddr);
 	block_t end_sum_blkaddr = get_newsb(main_blkaddr);
 	block_t expand_sum_blkaddr = new_sum_blkaddr +
-					TOTAL_SEGS(sbi) - offset;
+					MAIN_SEGS(sbi) - offset;
 	block_t blkaddr;
 	int ret;
 	void *zero_block = calloc(BLOCK_SZ, 1);
@@ -258,7 +258,7 @@ static void migrate_ssa(struct f2fs_sb_info *sbi,
 		}
 	} else {
 		blkaddr = end_sum_blkaddr - 1;
-		offset = TOTAL_SEGS(sbi) - 1;
+		offset = MAIN_SEGS(sbi) - 1;
 		while (blkaddr >= new_sum_blkaddr) {
 			if (blkaddr >= expand_sum_blkaddr) {
 				ret = dev_write_block(zero_block, blkaddr--);
@@ -412,7 +412,7 @@ static void migrate_sit(struct f2fs_sb_info *sbi,
 		DBG(3, "Write zero sit: %x\n", get_newsb(sit_blkaddr) + index);
 	}
 
-	for (segno = 0; segno < TOTAL_SEGS(sbi); segno++) {
+	for (segno = 0; segno < MAIN_SEGS(sbi); segno++) {
 		struct f2fs_sit_entry *sit;
 
 		se = get_seg_entry(sbi, segno);
@@ -475,8 +475,13 @@ static void rebuild_checkpoint(struct f2fs_sb_info *sbi,
 	set_cp(overprov_segment_count, (get_newsb(segment_count_main) -
 			get_cp(rsvd_segment_count)) *
 			c.new_overprovision / 100);
+
+	/* give 2 sections (DATA and NODE) to trigger GC in advance */
+	if (get_cp(overprov_segment_count) < get_cp(rsvd_segment_count))
+		set_cp(overprov_segment_count, get_cp(rsvd_segment_count));
+
 	set_cp(overprov_segment_count, get_cp(overprov_segment_count) +
-						get_cp(rsvd_segment_count));
+						2 * get_sb(segs_per_sec));
 
 	DBG(0, "Info: Overprovision ratio = %.3lf%%\n", c.new_overprovision);
 	DBG(0, "Info: Overprovision segments = %u (GC reserved = %u)\n",
@@ -607,7 +612,8 @@ static int f2fs_resize_check(struct f2fs_sb_info *sbi, struct f2fs_super_block *
 	overprov_segment_count = (get_newsb(segment_count_main) -
 			c.new_reserved_segments) *
 			c.new_overprovision / 100;
-	overprov_segment_count += c.new_reserved_segments;
+
+	overprov_segment_count += 2 * get_newsb(segs_per_sec);
 
 	user_block_count = (get_newsb(segment_count_main) -
 			overprov_segment_count) * c.blks_per_seg;
