@@ -18,6 +18,10 @@ Get the flags associated with the specified file.
 Set an f2fs file on specified file.  The flag can be casefold,
 compression, and nocompression.
 .TP
+\fBclearflags\fR \fI[flag] [file]\fR
+Clear the specified flag on the target file, which can be compression
+and nocompression.
+.TP
 \fBshutdown\fR \fIshutdown filesystem\fR
 Freeze and stop all IOs for the file system mounted on
 .IR dir.
@@ -42,6 +46,9 @@ going down with fsck mark
 .TP
 \fBpinfile\fR \fI[get|set] [file]\fR
 Get or set the pinning status on a file.
+.TP
+\fBfadvise\fR \fI[advice] [offset] [length] [file]\fR
+Pass an advice to the specified file. The advice can be willneed and sequential.
 .TP
 \fBfallocate\fR \fI[-c] [-i] [-p] [-z] [keep_size] [offset] [length] [file]\fR
 Request that space be allocated on a file.  The

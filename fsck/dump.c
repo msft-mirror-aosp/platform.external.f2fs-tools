@@ -71,7 +71,7 @@ void nat_dump(struct f2fs_sb_info *sbi, nid_t start_nat, nid_t end_nat)
 					"nid:%5u\tino:%5u\toffset:%5u"
 					"\tblkaddr:%10u\tpack:%d\n",
 					ni.nid, ni.ino,
-					le32_to_cpu(node_block->footer.flag) >>
+					le32_to_cpu(F2FS_NODE_FOOTER(node_block)->flag) >>
 						OFFSET_BIT_SHIFT,
 					ni.blk_addr, pack);
 				ret = write(fd, buf, strlen(buf));
@@ -92,7 +92,7 @@ void nat_dump(struct f2fs_sb_info *sbi, nid_t start_nat, nid_t end_nat)
 				"nid:%5u\tino:%5u\toffset:%5u"
 				"\tblkaddr:%10u\tpack:%d\n",
 				ni.nid, ni.ino,
-				le32_to_cpu(node_block->footer.flag) >>
+				le32_to_cpu(F2FS_NODE_FOOTER(node_block)->flag) >>
 					OFFSET_BIT_SHIFT,
 				ni.blk_addr, pack);
 			ret = write(fd, buf, strlen(buf));
@@ -354,6 +354,7 @@ static void dump_node_blk(struct f2fs_sb_info *sbi, int ntype,
 static void dump_xattr(struct f2fs_sb_info *sbi, struct f2fs_node *node_blk)
 {
 	void *xattr;
+	void *last_base_addr;
 	struct f2fs_xattr_entry *ent;
 	char xattr_name[F2FS_NAME_LEN] = {0};
 	int ret;
@@ -362,9 +363,17 @@ static void dump_xattr(struct f2fs_sb_info *sbi, struct f2fs_node *node_blk)
 	if (!xattr)
 		return;
 
+	last_base_addr = (void *)xattr + XATTR_SIZE(&node_blk->i);
+
 	list_for_each_xattr(ent, xattr) {
 		char *name = strndup(ent->e_name, ent->e_name_len);
 		void *value = ent->e_name + ent->e_name_len;
+
+		if ((void *)(ent) + sizeof(__u32) > last_base_addr ||
+			(void *)XATTR_NEXT_ENTRY(ent) > last_base_addr) {
+			MSG(0, "xattr entry crosses the end of xattr space\n");
+			break;
+		}
 
 		if (!name)
 			continue;
@@ -447,17 +456,17 @@ static int dump_inode_blk(struct f2fs_sb_info *sbi, u32 nid,
 	for (i = 0; i < 5; i++) {
 		if (i == 0 || i == 1)
 			dump_node_blk(sbi, TYPE_DIRECT_NODE,
-					le32_to_cpu(node_blk->i.i_nid[i]),
+					le32_to_cpu(F2FS_INODE_I_NID(&node_blk->i, i)),
 					addr_per_block,
 					&ofs);
 		else if (i == 2 || i == 3)
 			dump_node_blk(sbi, TYPE_INDIRECT_NODE,
-					le32_to_cpu(node_blk->i.i_nid[i]),
+					le32_to_cpu(F2FS_INODE_I_NID(&node_blk->i, i)),
 					addr_per_block,
 					&ofs);
 		else if (i == 4)
 			dump_node_blk(sbi, TYPE_DOUBLE_INDIRECT_NODE,
-					le32_to_cpu(node_blk->i.i_nid[i]),
+					le32_to_cpu(F2FS_INODE_I_NID(&node_blk->i, i)),
 					addr_per_block,
 					&ofs);
 		else
@@ -561,11 +570,11 @@ void dump_node_scan_disk(struct f2fs_sb_info *sbi, nid_t nid)
 
 		ret = dev_read_block(node_blk, blkaddr);
 		ASSERT(ret >= 0);
-		if (le32_to_cpu(node_blk->footer.ino) != nid ||
-				le32_to_cpu(node_blk->footer.nid) != nid)
+		if (le32_to_cpu(F2FS_NODE_FOOTER(node_blk)->ino) != nid ||
+				le32_to_cpu(F2FS_NODE_FOOTER(node_blk)->nid) != nid)
 			continue;
 		MSG(0, "Info: nid: %u, blkaddr: %lu\n", nid, blkaddr);
-		MSG(0, "node_blk.footer.flag [0x%x]\n", le32_to_cpu(node_blk->footer.flag));
+		MSG(0, "node_blk.footer.flag [0x%x]\n", le32_to_cpu(F2FS_NODE_FOOTER(node_blk)->flag));
 		MSG(0, "node_blk.footer.cp_ver [%x]\n", (u32)(cpver_of_node(node_blk)));
 		print_inode_info(sbi, node_blk, 0);
 	}
@@ -596,16 +605,14 @@ int dump_node(struct f2fs_sb_info *sbi, nid_t nid, int force)
 
 	dev_read_block(node_blk, ni.blk_addr);
 
-	if (ni.blk_addr == 0x0)
-		MSG(force, "Invalid nat entry\n\n");
-	else if (!is_sit_bitmap_set(sbi, ni.blk_addr))
+	if (!is_sit_bitmap_set(sbi, ni.blk_addr))
 		MSG(force, "Invalid sit bitmap, %u\n\n", ni.blk_addr);
 
-	DBG(1, "node_blk.footer.ino [0x%x]\n", le32_to_cpu(node_blk->footer.ino));
-	DBG(1, "node_blk.footer.nid [0x%x]\n", le32_to_cpu(node_blk->footer.nid));
+	DBG(1, "node_blk.footer.ino [0x%x]\n", le32_to_cpu(F2FS_NODE_FOOTER(node_blk)->ino));
+	DBG(1, "node_blk.footer.nid [0x%x]\n", le32_to_cpu(F2FS_NODE_FOOTER(node_blk)->nid));
 
-	if (le32_to_cpu(node_blk->footer.ino) == ni.ino &&
-			le32_to_cpu(node_blk->footer.nid) == ni.nid) {
+	if (le32_to_cpu(F2FS_NODE_FOOTER(node_blk)->ino) == ni.ino &&
+			le32_to_cpu(F2FS_NODE_FOOTER(node_blk)->nid) == ni.nid) {
 		if (!c.show_file_map)
 			print_node_info(sbi, node_blk, force);
 
@@ -680,8 +687,8 @@ static void dump_data_offset(u32 blk_addr, int ofs_in_node)
 	bidx +=  ofs_in_node;
 
 	setlocale(LC_ALL, "");
-	MSG(0, " - Data offset       : 0x%x (4KB), %'u (bytes)\n",
-				bidx, bidx * 4096);
+	MSG(0, " - Data offset       : 0x%x (BLOCK), %'u (bytes)\n",
+				bidx, bidx * F2FS_BLKSIZE);
 	free(node_blk);
 }
 

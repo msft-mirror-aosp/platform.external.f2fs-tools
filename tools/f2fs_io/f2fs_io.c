@@ -9,12 +9,6 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#ifndef _LARGEFILE_SOURCE
-#define _LARGEFILE_SOURCE
-#endif
-#ifndef _LARGEFILE64_SOURCE
-#define _LARGEFILE64_SOURCE
-#endif
 #ifndef O_LARGEFILE
 #define O_LARGEFILE 0
 #endif
@@ -330,6 +324,42 @@ static void do_setflags(int argc, char **argv, const struct cmd_desc *cmd)
 	exit(0);
 }
 
+#define clearflags_desc "clearflags ioctl"
+#define clearflags_help						\
+"f2fs_io clearflags [flag] [file]\n\n"				\
+"clear a flag given the file\n"					\
+"flag can be\n"							\
+"  compression\n"						\
+"  nocompression\n"						\
+
+static void do_clearflags(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	long flag = 0;
+	int ret, fd;
+
+	if (argc != 3) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	fd = xopen(argv[2], O_RDONLY, 0);
+
+	ret = ioctl(fd, F2FS_IOC_GETFLAGS, &flag);
+	printf("get a flag on %s ret=%d, flags=%lx\n", argv[1], ret, flag);
+	if (ret)
+		die_errno("F2FS_IOC_GETFLAGS failed");
+
+	if (!strcmp(argv[1], "compression"))
+		flag &= ~FS_COMPR_FL;
+	else if (!strcmp(argv[1], "nocompression"))
+		flag &= ~FS_NOCOMP_FL;
+
+	ret = ioctl(fd, F2FS_IOC_SETFLAGS, &flag);
+	printf("clear a flag on %s ret=%d, flags=%s\n", argv[2], ret, argv[1]);
+	exit(0);
+}
+
 #define shutdown_desc "shutdown filesystem"
 #define shutdown_help					\
 "f2fs_io shutdown [level] [dir]\n\n"			\
@@ -365,6 +395,47 @@ static void do_shutdown(int argc, char **argv, const struct cmd_desc *cmd)
 		die_errno("F2FS_IOC_SHUTDOWN failed");
 
 	printf("Shutdown %s with level=%d\n", argv[2], flag);
+	exit(0);
+}
+
+#define fadvise_desc "fadvise"
+#define fadvise_help						\
+"f2fs_io fadvise [advice] [offset] [length] [file]\n\n"		\
+"fadvice given the file\n"					\
+"advice can be\n"						\
+" willneed\n"							\
+" sequential\n"							\
+
+static void do_fadvise(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	int fd, advice;
+	off_t offset, length;
+
+	if (argc != 5) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	fd = xopen(argv[4], O_RDWR, 0);
+
+	if (!strcmp(argv[1], "willneed")) {
+		advice = POSIX_FADV_WILLNEED;
+	} else if (!strcmp(argv[1], "sequential")) {
+		advice = POSIX_FADV_SEQUENTIAL;
+	} else {
+		fputs("Wrong advice\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	offset = atoi(argv[2]);
+	length = atoll(argv[3]);
+
+	if (posix_fadvise(fd, offset, length, advice) != 0)
+		die_errno("fadvise failed");
+
+	printf("fadvice %s to a file: %s\n", argv[1], argv[4]);
 	exit(0);
 }
 
@@ -684,6 +755,7 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 	char *data;
 	char *print_buf = NULL;
 	unsigned bs, count, i, print_bytes;
+	u64 total_time = 0;
 	int flags = 0;
 	int do_mmap = 0;
 	int fd;
@@ -719,28 +791,29 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 
 	fd = xopen(argv[6], O_RDONLY | flags, 0);
 
+	total_time = get_current_us();
 	if (do_mmap) {
 		data = mmap(NULL, count * buf_size, PROT_READ,
-						MAP_SHARED, fd, offset);
+						MAP_SHARED | MAP_POPULATE, fd, offset);
 		if (data == MAP_FAILED)
 			die("Mmap failed");
 	}
-
-	for (i = 0; i < count; i++) {
-		if (do_mmap) {
-			memcpy(buf, data + offset + buf_size * i, buf_size);
-			ret = buf_size;
-		} else {
+	if (!do_mmap) {
+		for (i = 0; i < count; i++) {
 			ret = pread(fd, buf, buf_size, offset + buf_size * i);
-		}
-		if (ret != buf_size)
-			break;
+			if (ret != buf_size)
+				break;
 
-		read_cnt += ret;
-		if (i == 0)
-			memcpy(print_buf, buf, print_bytes);
+			read_cnt += ret;
+			if (i == 0)
+				memcpy(print_buf, buf, print_bytes);
+		}
+	} else {
+		read_cnt = count * buf_size;
+		memcpy(print_buf, data, print_bytes);
 	}
-	printf("Read %"PRIu64" bytes and print %u bytes:\n", read_cnt, print_bytes);
+	printf("Read %"PRIu64" bytes total_time = %"PRIu64" us, print %u bytes:\n",
+		read_cnt, get_current_us() - total_time, print_bytes);
 	printf("%08"PRIx64" : ", offset);
 	for (i = 1; i <= print_bytes; i++) {
 		printf("%02x", print_buf[i - 1]);
@@ -1464,8 +1537,10 @@ const struct cmd_desc cmd_list[] = {
 	CMD(set_verity),
 	CMD(getflags),
 	CMD(setflags),
+	CMD(clearflags),
 	CMD(shutdown),
 	CMD(pinfile),
+	CMD(fadvise),
 	CMD(fallocate),
 	CMD(erase),
 	CMD(write),
