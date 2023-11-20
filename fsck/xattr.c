@@ -17,19 +17,20 @@
 #include "node.h"
 #include "xattr.h"
 
-void *read_all_xattrs(struct f2fs_sb_info *sbi, struct f2fs_node *inode)
+void *read_all_xattrs(struct f2fs_sb_info *sbi, struct f2fs_node *inode,
+			bool sanity_check)
 {
 	struct f2fs_xattr_header *header;
 	void *txattr_addr;
 	u64 inline_size = inline_xattr_size(&inode->i);
 	nid_t xnid = le32_to_cpu(inode->i.i_xattr_nid);
 
-	if (c.func == FSCK && xnid) {
+	if (c.func == FSCK && xnid && sanity_check) {
 		if (fsck_sanity_check_nid(sbi, xnid, F2FS_FT_XATTR, TYPE_XATTR))
 			return NULL;
 	}
 
-	txattr_addr = calloc(inline_size + BLOCK_SZ, 1);
+	txattr_addr = calloc(inline_size + F2FS_BLKSIZE, 1);
 	ASSERT(txattr_addr);
 
 	if (inline_size)
@@ -43,6 +44,9 @@ void *read_all_xattrs(struct f2fs_sb_info *sbi, struct f2fs_node *inode)
 		get_node_info(sbi, xnid, &ni);
 		ret = dev_read_block(txattr_addr + inline_size, ni.blk_addr);
 		ASSERT(ret >= 0);
+		memset(txattr_addr + inline_size + F2FS_BLKSIZE -
+				sizeof(struct node_footer), 0,
+				sizeof(struct node_footer));
 	}
 
 	header = XATTR_HDR(txattr_addr);
@@ -78,7 +82,7 @@ static struct f2fs_xattr_entry *__find_xattr(void *base_addr,
 	return entry;
 }
 
-static void write_all_xattrs(struct f2fs_sb_info *sbi,
+void write_all_xattrs(struct f2fs_sb_info *sbi,
 		struct f2fs_node *inode, __u32 hsize, void *txattr_addr)
 {
 	void *xattr_addr;
@@ -109,7 +113,7 @@ static void write_all_xattrs(struct f2fs_sb_info *sbi,
 		set_new_dnode(&dn, inode, NULL, xnid);
 		get_node_info(sbi, xnid, &ni);
 		blkaddr = ni.blk_addr;
-		xattr_node = calloc(BLOCK_SZ, 1);
+		xattr_node = calloc(F2FS_BLKSIZE, 1);
 		ASSERT(xattr_node);
 		ret = dev_read_block(xattr_node, ni.blk_addr);
 		if (ret < 0)
@@ -160,12 +164,12 @@ int f2fs_setxattr(struct f2fs_sb_info *sbi, nid_t ino, int index, const char *na
 	ASSERT(index == F2FS_XATTR_INDEX_SECURITY);
 
 	get_node_info(sbi, ino, &ni);
-	inode = calloc(BLOCK_SZ, 1);
+	inode = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(inode);
 	ret = dev_read_block(inode, ni.blk_addr);
 	ASSERT(ret >= 0);
 
-	base_addr = read_all_xattrs(sbi, inode);
+	base_addr = read_all_xattrs(sbi, inode, true);
 	ASSERT(base_addr);
 
 	last_base_addr = (void *)base_addr + XATTR_SIZE(&inode->i);

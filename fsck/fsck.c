@@ -67,6 +67,14 @@ int f2fs_set_sit_bitmap(struct f2fs_sb_info *sbi, u32 blk)
 	return f2fs_set_bit(BLKOFF_FROM_MAIN(sbi, blk), fsck->sit_area_bitmap);
 }
 
+static inline int f2fs_clear_sit_bitmap(struct f2fs_sb_info *sbi, u32 blk)
+{
+	struct f2fs_fsck *fsck = F2FS_FSCK(sbi);
+
+	return f2fs_clear_bit(BLKOFF_FROM_MAIN(sbi, blk),
+						fsck->sit_area_bitmap);
+}
+
 static int add_into_hard_link_list(struct f2fs_sb_info *sbi,
 						u32 nid, u32 link_cnt)
 {
@@ -228,7 +236,7 @@ static int is_valid_summary(struct f2fs_sb_info *sbi, struct f2fs_summary *sum,
 	struct node_info ni;
 	int ret = 0;
 
-	node_blk = (struct f2fs_node *)calloc(BLOCK_SZ, 1);
+	node_blk = (struct f2fs_node *)calloc(F2FS_BLKSIZE, 1);
 	ASSERT(node_blk != NULL);
 
 	if (!IS_VALID_NID(sbi, nid))
@@ -537,7 +545,7 @@ int fsck_sanity_check_nid(struct f2fs_sb_info *sbi, u32 nid,
 	struct node_info ni;
 	int ret;
 
-	node_blk = (struct f2fs_node *)calloc(BLOCK_SZ, 1);
+	node_blk = (struct f2fs_node *)calloc(F2FS_BLKSIZE, 1);
 	ASSERT(node_blk != NULL);
 
 	ret = sanity_check_nid(sbi, nid, node_blk, ftype, ntype, &ni);
@@ -556,7 +564,7 @@ static int fsck_chk_xattr_blk(struct f2fs_sb_info *sbi, u32 ino,
 	if (x_nid == 0x0)
 		return 0;
 
-	node_blk = (struct f2fs_node *)calloc(BLOCK_SZ, 1);
+	node_blk = (struct f2fs_node *)calloc(F2FS_BLKSIZE, 1);
 	ASSERT(node_blk != NULL);
 
 	/* Sanity check */
@@ -582,7 +590,7 @@ int fsck_chk_node_blk(struct f2fs_sb_info *sbi, struct f2fs_inode *inode,
 	struct node_info ni;
 	struct f2fs_node *node_blk = NULL;
 
-	node_blk = (struct f2fs_node *)calloc(BLOCK_SZ, 1);
+	node_blk = (struct f2fs_node *)calloc(F2FS_BLKSIZE, 1);
 	ASSERT(node_blk != NULL);
 
 	if (sanity_check_nid(sbi, nid, node_blk, ftype, ntype, &ni))
@@ -649,7 +657,7 @@ int fsck_chk_root_inode(struct f2fs_sb_info *sbi)
 	u32 last_ctime_nsec = 0;
 	int ret = -EINVAL;
 
-	node_blk = calloc(BLOCK_SZ, 1);
+	node_blk = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(node_blk);
 
 	MSG(0, "Info: root inode is corrupted, search and relink it\n");
@@ -727,7 +735,6 @@ fix:
 		struct f2fs_fsck *fsck = F2FS_FSCK(sbi);
 
 		FIX_MSG("Relink root inode, blkaddr: 0x%x", last_blkaddr);
-		update_nat_journal_blkaddr(sbi, root_ino, last_blkaddr);
 		update_nat_blkaddr(sbi, root_ino, root_ino, last_blkaddr);
 
 		if (f2fs_test_bit(root_ino, fsck->nat_area_bitmap))
@@ -824,6 +831,61 @@ void fsck_reada_all_direct_node_blocks(struct f2fs_sb_info *sbi,
 
 		fsck_reada_node_block(sbi, nid);
 	}
+}
+
+static bool is_zeroed(const u8 *p, size_t size)
+{
+	size_t i;
+
+	for (i = 0; i < size; i++) {
+		if (p[i])
+			return false;
+	}
+	return true;
+}
+
+int chk_extended_attributes(struct f2fs_sb_info *sbi, u32 nid,
+		struct f2fs_node *inode)
+{
+	void *xattr;
+	void *last_base_addr;
+	struct f2fs_xattr_entry *ent;
+	__u32 xattr_size = XATTR_SIZE(&inode->i);
+	bool need_fix = false;
+
+	if (xattr_size == 0)
+		return 0;
+
+	xattr = read_all_xattrs(sbi, inode, false);
+	ASSERT(xattr);
+
+	last_base_addr = (void *)xattr + xattr_size;
+
+	list_for_each_xattr(ent, xattr) {
+		if ((void *)(ent) + sizeof(__u32) > last_base_addr ||
+			(void *)XATTR_NEXT_ENTRY(ent) > last_base_addr) {
+			ASSERT_MSG("[0x%x] last xattr entry (offset: %lx) "
+					"crosses the boundary",
+					nid, (long int)((void *)ent - xattr));
+			need_fix = true;
+			break;
+		}
+	}
+	if (!need_fix &&
+	    !is_zeroed((u8 *)ent, (u8 *)last_base_addr - (u8 *)ent)) {
+		ASSERT_MSG("[0x%x] nonzero bytes in xattr space after "
+				"end of list", nid);
+		need_fix = true;
+	}
+	if (need_fix && c.fix_on) {
+		memset(ent, 0, (u8 *)last_base_addr - (u8 *)ent);
+		write_all_xattrs(sbi, inode, xattr_size, xattr);
+		FIX_MSG("[0x%x] nullify wrong xattr entries", nid);
+		free(xattr);
+		return 1;
+	}
+	free(xattr);
+	return 0;
 }
 
 /* start with valid nid and blkaddr */
@@ -999,6 +1061,9 @@ check_next:
 			need_fix = 1;
 		}
 	}
+
+	if (chk_extended_attributes(sbi, nid, node_blk))
+		need_fix = 1;
 
 	if ((node_blk->i.i_inline & F2FS_INLINE_DATA)) {
 		unsigned int inline_size = MAX_INLINE_DATA(node_blk);
@@ -1947,7 +2012,7 @@ int fsck_chk_dentry_blk(struct f2fs_sb_info *sbi, int casefolded, u32 blk_addr,
 	struct f2fs_dentry *new_dentry;
 	int dentries, ret;
 
-	de_blk = (struct f2fs_dentry_block *)calloc(BLOCK_SZ, 1);
+	de_blk = (struct f2fs_dentry_block *)calloc(F2FS_BLKSIZE, 1);
 	ASSERT(de_blk != NULL);
 
 	ret = dev_read_block(de_blk, blk_addr);
@@ -2047,10 +2112,10 @@ int fsck_chk_orphan_node(struct f2fs_sb_info *sbi)
 
 	f2fs_ra_meta_pages(sbi, start_blk, orphan_blkaddr, META_CP);
 
-	orphan_blk = calloc(BLOCK_SZ, 1);
+	orphan_blk = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(orphan_blk);
 
-	new_blk = calloc(BLOCK_SZ, 1);
+	new_blk = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(new_blk);
 
 	for (i = 0; i < orphan_blkaddr; i++) {
@@ -2098,8 +2163,8 @@ int fsck_chk_orphan_node(struct f2fs_sb_info *sbi)
 			ret = dev_write_block(new_blk, start_blk + i);
 			ASSERT(ret >= 0);
 		}
-		memset(orphan_blk, 0, BLOCK_SZ);
-		memset(new_blk, 0, BLOCK_SZ);
+		memset(orphan_blk, 0, F2FS_BLKSIZE);
+		memset(new_blk, 0, F2FS_BLKSIZE);
 	}
 	free(orphan_blk);
 	free(new_blk);
@@ -2150,6 +2215,9 @@ int fsck_chk_quota_node(struct f2fs_sb_info *sbi)
 	return ret;
 }
 
+static void fsck_disconnect_file(struct f2fs_sb_info *sbi, nid_t ino,
+			bool dealloc);
+
 int fsck_chk_quota_files(struct f2fs_sb_info *sbi)
 {
 	struct f2fs_fsck *fsck = F2FS_FSCK(sbi);
@@ -2181,6 +2249,8 @@ int fsck_chk_quota_files(struct f2fs_sb_info *sbi)
 		if (c.fix_on) {
 			DBG(0, "Fixing Quota file ([%3d] ino [0x%x])\n",
 							qtype, ino);
+			fsck_disconnect_file(sbi, ino, true);
+			f2fs_rebuild_qf_inode(sbi, qtype);
 			f2fs_filesize_update(sbi, ino, 0);
 			ret = quota_write_inode(sbi, qtype);
 			if (!ret) {
@@ -2371,7 +2441,7 @@ static void fix_hard_links(struct f2fs_sb_info *sbi)
 	if (fsck->hard_link_list_head == NULL)
 		return;
 
-	node_blk = (struct f2fs_node *)calloc(BLOCK_SZ, 1);
+	node_blk = (struct f2fs_node *)calloc(F2FS_BLKSIZE, 1);
 	ASSERT(node_blk != NULL);
 
 	node = fsck->hard_link_list_head;
@@ -2411,7 +2481,7 @@ static void flush_curseg_sit_entries(struct f2fs_sb_info *sbi)
 	struct f2fs_sit_block *sit_blk;
 	int i;
 
-	sit_blk = calloc(BLOCK_SZ, 1);
+	sit_blk = calloc(F2FS_BLKSIZE, 1);
 	ASSERT(sit_blk);
 	/* update curseg sit entries, since we may change
 	 * a segment type in move_curseg_info
@@ -2455,7 +2525,8 @@ static void fix_checkpoint(struct f2fs_sb_info *sbi)
 	struct f2fs_super_block *sb = F2FS_RAW_SUPER(sbi);
 	struct f2fs_checkpoint *cp = F2FS_CKPT(sbi);
 	unsigned long long cp_blk_no;
-	u32 flags = c.alloc_failed ? CP_FSCK_FLAG: CP_UMOUNT_FLAG;
+	u32 flags = c.alloc_failed ? CP_FSCK_FLAG :
+			(c.roll_forward ? 0 : CP_UMOUNT_FLAG);
 	block_t orphan_blks = 0;
 	block_t cp_blocks;
 	u32 i;
@@ -2587,10 +2658,9 @@ static int check_curseg_write_pointer(struct f2fs_sb_info *sbi, int type)
 	struct curseg_info *curseg = CURSEG_I(sbi, type);
 	struct f2fs_fsck *fsck = F2FS_FSCK(sbi);
 	struct blk_zone blkz;
-	block_t cs_block, wp_block, zone_last_vblock;
+	block_t cs_block, wp_block;
 	uint64_t cs_sector, wp_sector;
 	int i, ret;
-	unsigned int zone_segno;
 	int log_sectors_per_block = sbi->log_blocksize - SECTOR_SHIFT;
 
 	/* get the device the curseg points to */
@@ -2624,49 +2694,28 @@ static int check_curseg_write_pointer(struct f2fs_sb_info *sbi, int type)
 		(blk_zone_wp_sector(&blkz) >> log_sectors_per_block);
 	wp_sector = blk_zone_wp_sector(&blkz);
 
-	if (cs_sector == wp_sector)
-		return 0;
-
-	if (cs_sector > wp_sector) {
+	if (cs_sector == wp_sector) {
+		if (is_set_ckpt_flags(F2FS_CKPT(sbi), CP_UMOUNT_FLAG))
+			return 0;
+		MSG(0, "Correct write pointer. But, we can't trust it, "
+		    "since the previous mount wasn't safely unmounted: "
+		    "curseg %d[0x%x,0x%x]\n",
+		    type, curseg->segno, curseg->next_blkoff);
+	} else if (cs_sector > wp_sector) {
 		MSG(0, "Inconsistent write pointer with curseg %d: "
 		    "curseg %d[0x%x,0x%x] > wp[0x%x,0x%x]\n",
 		    type, type, curseg->segno, curseg->next_blkoff,
+		    GET_SEGNO(sbi, wp_block),
+		    OFFSET_IN_SEG(sbi, wp_block));
+		if (!c.fix_on)
+			fsck->chk.wp_inconsistent_zones++;
+	} else {
+		MSG(0, "Write pointer goes advance from curseg %d: "
+		    "curseg %d[0x%x,0x%x] wp[0x%x,0x%x]\n",
+		    type, type, curseg->segno, curseg->next_blkoff,
 		    GET_SEGNO(sbi, wp_block), OFFSET_IN_SEG(sbi, wp_block));
-		fsck->chk.wp_inconsistent_zones++;
-		return -EINVAL;
 	}
 
-	MSG(0, "Write pointer goes advance from curseg %d: "
-	    "curseg %d[0x%x,0x%x] wp[0x%x,0x%x]\n",
-	    type, type, curseg->segno, curseg->next_blkoff,
-	    GET_SEGNO(sbi, wp_block), OFFSET_IN_SEG(sbi, wp_block));
-
-	zone_segno = GET_SEG_FROM_SEC(sbi,
-				      GET_SEC_FROM_SEG(sbi, curseg->segno));
-	zone_last_vblock = START_BLOCK(sbi, zone_segno) +
-		last_vblk_off_in_zone(sbi, zone_segno);
-
-	/*
-	 * If valid blocks exist between the curseg position and the write
-	 * pointer, they are fsync data. This is not an error to fix. Leave it
-	 * for kernel to recover later.
-	 * If valid blocks exist between the curseg's zone start and the curseg
-	 * position, or if there is no valid block in the curseg's zone, fix
-	 * the inconsistency between the curseg and the writ pointer.
-	 * Of Note is that if there is no valid block in the curseg's zone,
-	 * last_vblk_off_in_zone() returns -1 and zone_last_vblock is always
-	 * smaller than cs_block.
-	 */
-	if (cs_block <= zone_last_vblock && zone_last_vblock < wp_block) {
-		MSG(0, "Curseg has fsync data: curseg %d[0x%x,0x%x] "
-		    "last valid block in zone[0x%x,0x%x]\n",
-		    type, curseg->segno, curseg->next_blkoff,
-		    GET_SEGNO(sbi, zone_last_vblock),
-		    OFFSET_IN_SEG(sbi, zone_last_vblock));
-		return 0;
-	}
-
-	fsck->chk.wp_inconsistent_zones++;
 	return -EINVAL;
 }
 
@@ -2680,7 +2729,7 @@ static int check_curseg_write_pointer(struct f2fs_sb_info *UNUSED(sbi),
 
 #endif
 
-int check_curseg_offset(struct f2fs_sb_info *sbi, int type)
+int check_curseg_offset(struct f2fs_sb_info *sbi, int type, bool check_wp)
 {
 	struct f2fs_super_block *sb = F2FS_RAW_SUPER(sbi);
 	struct curseg_info *curseg = CURSEG_I(sbi, type);
@@ -2714,30 +2763,30 @@ int check_curseg_offset(struct f2fs_sb_info *sbi, int type)
 		}
 	}
 
-	if (c.zoned_model == F2FS_ZONED_HM)
+	if (check_wp && c.zoned_model == F2FS_ZONED_HM)
 		return check_curseg_write_pointer(sbi, type);
 
 	return 0;
 }
 
-int check_curseg_offsets(struct f2fs_sb_info *sbi)
+int check_curseg_offsets(struct f2fs_sb_info *sbi, bool check_wp)
 {
 	int i, ret;
 
 	for (i = 0; i < NO_CHECK_TYPE; i++) {
-		ret = check_curseg_offset(sbi, i);
+		ret = check_curseg_offset(sbi, i, check_wp);
 		if (ret)
 			return ret;
 	}
 	return 0;
 }
 
-static void fix_curseg_info(struct f2fs_sb_info *sbi)
+static void fix_curseg_info(struct f2fs_sb_info *sbi, bool check_wp)
 {
 	int i, need_update = 0;
 
 	for (i = 0; i < NO_CHECK_TYPE; i++) {
-		if (check_curseg_offset(sbi, i)) {
+		if (check_curseg_offset(sbi, i, check_wp)) {
 			update_curseg_info(sbi, i);
 			need_update = 1;
 		}
@@ -2874,10 +2923,53 @@ static int fsck_do_reconnect_file(struct f2fs_sb_info *sbi,
 	return 0;
 }
 
-static void fsck_failed_reconnect_file_dnode(struct f2fs_sb_info *sbi,
-					struct f2fs_inode *inode, nid_t nid)
+static inline void release_inode_cnt(struct f2fs_sb_info *sbi, bool dealloc)
 {
-	struct f2fs_fsck *fsck = F2FS_FSCK(sbi);
+	F2FS_FSCK(sbi)->chk.valid_inode_cnt--;
+	if (dealloc)
+		sbi->total_valid_inode_count--;
+}
+
+static inline void release_node_cnt(struct f2fs_sb_info *sbi, bool dealloc)
+{
+	F2FS_FSCK(sbi)->chk.valid_node_cnt--;
+	if (dealloc)
+		sbi->total_valid_node_count--;
+}
+
+static inline void release_block_cnt(struct f2fs_sb_info *sbi, bool dealloc)
+{
+	F2FS_FSCK(sbi)->chk.valid_blk_cnt--;
+	if (dealloc)
+		sbi->total_valid_block_count--;
+}
+
+static inline void release_block(struct f2fs_sb_info *sbi, u64 blkaddr,
+			bool dealloc)
+{
+	f2fs_clear_main_bitmap(sbi, blkaddr);
+	if (dealloc) {
+		struct seg_entry *se;
+		u64 offset;
+
+		se = get_seg_entry(sbi, GET_SEGNO(sbi, blkaddr));
+		offset = OFFSET_IN_SEG(sbi, blkaddr);
+		se->valid_blocks--;
+		f2fs_clear_bit(offset, (char *)se->cur_valid_map);
+		se->dirty = 1;
+		f2fs_clear_sit_bitmap(sbi, blkaddr);
+	}
+}
+
+static inline void release_nat_entry(struct f2fs_sb_info *sbi, u32 nid)
+{
+	nullify_nat_entry(sbi, nid);
+	F2FS_FSCK(sbi)->chk.valid_nat_entry_cnt--;
+}
+
+static void fsck_disconnect_file_dnode(struct f2fs_sb_info *sbi,
+			struct f2fs_inode *inode, nid_t nid, bool dealloc)
+{
 	struct f2fs_node *node;
 	struct node_info ni;
 	u32 addr;
@@ -2890,27 +2982,29 @@ static void fsck_failed_reconnect_file_dnode(struct f2fs_sb_info *sbi,
 	err = dev_read_block(node, ni.blk_addr);
 	ASSERT(err >= 0);
 
-	fsck->chk.valid_node_cnt--;
-	fsck->chk.valid_blk_cnt--;
-	f2fs_clear_main_bitmap(sbi, ni.blk_addr);
+	release_node_cnt(sbi, dealloc);
+	release_block_cnt(sbi, dealloc);
+	release_block(sbi, ni.blk_addr, dealloc);
 
 	for (i = 0; i < ADDRS_PER_BLOCK(inode); i++) {
 		addr = le32_to_cpu(node->dn.addr[i]);
 		if (!addr)
 			continue;
-		fsck->chk.valid_blk_cnt--;
+		release_block_cnt(sbi, dealloc);
 		if (addr == NEW_ADDR || addr == COMPRESS_ADDR)
 			continue;
-		f2fs_clear_main_bitmap(sbi, addr);
+		release_block(sbi, addr, dealloc);
 	}
+
+	if (dealloc)
+		release_nat_entry(sbi, nid);
 
 	free(node);
 }
 
-static void fsck_failed_reconnect_file_idnode(struct f2fs_sb_info *sbi,
-					struct f2fs_inode *inode, nid_t nid)
+static void fsck_disconnect_file_idnode(struct f2fs_sb_info *sbi,
+			struct f2fs_inode *inode, nid_t nid, bool dealloc)
 {
-	struct f2fs_fsck *fsck = F2FS_FSCK(sbi);
 	struct f2fs_node *node;
 	struct node_info ni;
 	nid_t tmp;
@@ -2923,24 +3017,26 @@ static void fsck_failed_reconnect_file_idnode(struct f2fs_sb_info *sbi,
 	err = dev_read_block(node, ni.blk_addr);
 	ASSERT(err >= 0);
 
-	fsck->chk.valid_node_cnt--;
-	fsck->chk.valid_blk_cnt--;
-	f2fs_clear_main_bitmap(sbi, ni.blk_addr);
+	release_node_cnt(sbi, dealloc);
+	release_block_cnt(sbi, dealloc);
+	release_block(sbi, ni.blk_addr, dealloc);
 
 	for (i = 0; i < NIDS_PER_BLOCK; i++) {
 		tmp = le32_to_cpu(node->in.nid[i]);
 		if (!tmp)
 			continue;
-		fsck_failed_reconnect_file_dnode(sbi, inode, tmp);
+		fsck_disconnect_file_dnode(sbi, inode, tmp, dealloc);
 	}
+
+	if (dealloc)
+		release_nat_entry(sbi, nid);
 
 	free(node);
 }
 
-static void fsck_failed_reconnect_file_didnode(struct f2fs_sb_info *sbi,
-					struct f2fs_inode *inode, nid_t nid)
+static void fsck_disconnect_file_didnode(struct f2fs_sb_info *sbi,
+			struct f2fs_inode *inode, nid_t nid, bool dealloc)
 {
-	struct f2fs_fsck *fsck = F2FS_FSCK(sbi);
 	struct f2fs_node *node;
 	struct node_info ni;
 	nid_t tmp;
@@ -2953,28 +3049,26 @@ static void fsck_failed_reconnect_file_didnode(struct f2fs_sb_info *sbi,
 	err = dev_read_block(node, ni.blk_addr);
 	ASSERT(err >= 0);
 
-	fsck->chk.valid_node_cnt--;
-	fsck->chk.valid_blk_cnt--;
-	f2fs_clear_main_bitmap(sbi, ni.blk_addr);
+	release_node_cnt(sbi, dealloc);
+	release_block_cnt(sbi, dealloc);
+	release_block(sbi, ni.blk_addr, dealloc);
 
 	for (i = 0; i < NIDS_PER_BLOCK; i++) {
 		tmp = le32_to_cpu(node->in.nid[i]);
 		if (!tmp)
 			continue;
-		fsck_failed_reconnect_file_idnode(sbi, inode, tmp);
+		fsck_disconnect_file_idnode(sbi, inode, tmp, dealloc);
 	}
+
+	if (dealloc)
+		release_nat_entry(sbi, nid);
 
 	free(node);
 }
 
-/*
- * Counters and main_area_bitmap are already changed during checking
- * inode block, so clear them. There is no need to clear new blocks
- * allocted to lost+found.
- */
-static void fsck_failed_reconnect_file(struct f2fs_sb_info *sbi, nid_t ino)
+static void fsck_disconnect_file(struct f2fs_sb_info *sbi, nid_t ino,
+			bool dealloc)
 {
-	struct f2fs_fsck *fsck = F2FS_FSCK(sbi);
 	struct f2fs_node *node;
 	struct node_info ni;
 	nid_t nid;
@@ -2988,18 +3082,18 @@ static void fsck_failed_reconnect_file(struct f2fs_sb_info *sbi, nid_t ino)
 	ASSERT(err >= 0);
 
 	/* clear inode counters */
-	fsck->chk.valid_inode_cnt--;
-	fsck->chk.valid_node_cnt--;
-	fsck->chk.valid_blk_cnt--;
-	f2fs_clear_main_bitmap(sbi, ni.blk_addr);
+	release_inode_cnt(sbi, dealloc);
+	release_node_cnt(sbi, dealloc);
+	release_block_cnt(sbi, dealloc);
+	release_block(sbi, ni.blk_addr, dealloc);
 
 	/* clear xnid counters */
 	if (node->i.i_xattr_nid) {
 		nid = le32_to_cpu(node->i.i_xattr_nid);
-		fsck->chk.valid_node_cnt--;
-		fsck->chk.valid_blk_cnt--;
+		release_node_cnt(sbi, dealloc);
+		release_block_cnt(sbi, dealloc);
 		get_node_info(sbi, nid, &ni);
-		f2fs_clear_main_bitmap(sbi, ni.blk_addr);
+		release_block(sbi, ni.blk_addr, dealloc);
 	}
 
 	/* clear data counters */
@@ -3009,10 +3103,10 @@ static void fsck_failed_reconnect_file(struct f2fs_sb_info *sbi, nid_t ino)
 			block_t addr = le32_to_cpu(node->i.i_addr[ofs + i]);
 			if (!addr)
 				continue;
-			fsck->chk.valid_blk_cnt--;
+			release_block_cnt(sbi, dealloc);
 			if (addr == NEW_ADDR || addr == COMPRESS_ADDR)
 				continue;
-			f2fs_clear_main_bitmap(sbi, addr);
+			release_block(sbi, addr, dealloc);
 		}
 	}
 
@@ -3024,17 +3118,23 @@ static void fsck_failed_reconnect_file(struct f2fs_sb_info *sbi, nid_t ino)
 		switch (i) {
 		case 0: /* direct node */
 		case 1:
-			fsck_failed_reconnect_file_dnode(sbi, &node->i, nid);
+			fsck_disconnect_file_dnode(sbi, &node->i, nid,
+					dealloc);
 			break;
 		case 2: /* indirect node */
 		case 3:
-			fsck_failed_reconnect_file_idnode(sbi, &node->i, nid);
+			fsck_disconnect_file_idnode(sbi, &node->i, nid,
+					dealloc);
 			break;
 		case 4: /* double indirect node */
-			fsck_failed_reconnect_file_didnode(sbi, &node->i, nid);
+			fsck_disconnect_file_didnode(sbi, &node->i, nid,
+					dealloc);
 			break;
 		}
 	}
+
+	if (dealloc)
+		release_nat_entry(sbi, ino);
 
 	free(node);
 }
@@ -3121,7 +3221,7 @@ static int fsck_reconnect_file(struct f2fs_sb_info *sbi)
 			if (fsck_do_reconnect_file(sbi, lpf_node, node)) {
 				DBG(1, "Failed to reconnect inode [0x%x]\n",
 				    nid);
-				fsck_failed_reconnect_file(sbi, nid);
+				fsck_disconnect_file(sbi, nid, false);
 				continue;
 			}
 
@@ -3155,10 +3255,8 @@ static int chk_and_fix_wp_with_sit(int UNUSED(i), void *blkzone, void *opaque)
 	struct f2fs_fsck *fsck = F2FS_FSCK(sbi);
 	block_t zone_block, wp_block, wp_blkoff;
 	unsigned int zone_segno, wp_segno;
-	struct curseg_info *cs;
-	int cs_index, ret, last_valid_blkoff;
+	int ret, last_valid_blkoff;
 	int log_sectors_per_block = sbi->log_blocksize - SECTOR_SHIFT;
-	unsigned int segs_per_zone = sbi->segs_per_sec * sbi->secs_per_zone;
 
 	if (blk_zone_conv(blkz))
 		return 0;
@@ -3173,14 +3271,6 @@ static int chk_and_fix_wp_with_sit(int UNUSED(i), void *blkzone, void *opaque)
 		+ (blk_zone_wp_sector(blkz) >> log_sectors_per_block);
 	wp_segno = GET_SEGNO(sbi, wp_block);
 	wp_blkoff = wp_block - START_BLOCK(sbi, wp_segno);
-
-	/* if a curseg points to the zone, skip the check */
-	for (cs_index = 0; cs_index < NO_CHECK_TYPE; cs_index++) {
-		cs = &SM_I(sbi)->curseg_array[cs_index];
-		if (zone_segno <= cs->segno &&
-		    cs->segno < zone_segno + segs_per_zone)
-			return 0;
-	}
 
 	last_valid_blkoff = last_vblk_off_in_zone(sbi, zone_segno);
 
@@ -3217,10 +3307,27 @@ static int chk_and_fix_wp_with_sit(int UNUSED(i), void *blkzone, void *opaque)
 	if (last_valid_blkoff + zone_block > wp_block) {
 		MSG(0, "Unexpected invalid write pointer: wp[0x%x,0x%x]\n",
 		    wp_segno, wp_blkoff);
-		return 0;
+		if (!c.fix_on)
+			fsck->chk.wp_inconsistent_zones++;
 	}
 
-	return 0;
+	if (!c.fix_on)
+		return 0;
+
+	ret = f2fs_finish_zone(wpd->dev_index, blkz);
+	if (ret) {
+		u64 fill_sects = blk_zone_length(blkz) -
+			(blk_zone_wp_sector(blkz) - blk_zone_sector(blkz));
+		printf("[FSCK] Finishing zone failed: %s\n", dev->path);
+		ret = dev_fill(NULL, wp_block * F2FS_BLKSIZE,
+			(fill_sects >> log_sectors_per_block) * F2FS_BLKSIZE);
+		if (ret)
+			printf("[FSCK] Fill up zone failed: %s\n", dev->path);
+	}
+
+	if (!ret)
+		fsck->chk.wp_fixed = 1;
+	return ret;
 }
 
 static void fix_wp_sit_alignment(struct f2fs_sb_info *sbi)
@@ -3266,8 +3373,8 @@ void fsck_chk_and_fix_write_pointers(struct f2fs_sb_info *sbi)
 	if (c.zoned_model != F2FS_ZONED_HM)
 		return;
 
-	if (check_curseg_offsets(sbi) && c.fix_on) {
-		fix_curseg_info(sbi);
+	if (check_curseg_offsets(sbi, true) && c.fix_on) {
+		fix_curseg_info(sbi, true);
 		fsck->chk.wp_fixed = 1;
 	}
 
@@ -3461,7 +3568,7 @@ int fsck_verify(struct f2fs_sb_info *sbi)
 	}
 
 	printf("[FSCK] next block offset is free                     ");
-	if (check_curseg_offsets(sbi) == 0) {
+	if (check_curseg_offsets(sbi, false) == 0) {
 		printf(" [Ok..]\n");
 	} else {
 		printf(" [Fail]\n");
@@ -3514,7 +3621,7 @@ int fsck_verify(struct f2fs_sb_info *sbi)
 			fix_nat_entries(sbi);
 			rewrite_sit_area_bitmap(sbi);
 			fix_wp_sit_alignment(sbi);
-			fix_curseg_info(sbi);
+			fix_curseg_info(sbi, false);
 			fix_checksum(sbi);
 			fix_checkpoints(sbi);
 		} else if (is_set_ckpt_flags(cp, CP_FSCK_FLAG) ||
