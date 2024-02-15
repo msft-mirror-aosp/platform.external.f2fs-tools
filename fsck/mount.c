@@ -995,6 +995,10 @@ int sanity_check_raw_super(struct f2fs_super_block *sb, enum SB_ADDR sb_addr)
 		return -1;
 
 	blocksize = 1 << get_sb(log_blocksize);
+	if (c.sparse_mode && F2FS_BLKSIZE != blocksize) {
+		MSG(0, "Invalid blocksize (%u), does not equal sparse file blocksize (%u)",
+			F2FS_BLKSIZE, blocksize);
+	}
 	if (blocksize < F2FS_MIN_BLKSIZE || blocksize > F2FS_MAX_BLKSIZE) {
 		MSG(0, "Invalid blocksize (%u), must be between 4KB and 16KB\n",
 			blocksize);
@@ -3811,14 +3815,11 @@ static int do_record_fsync_data(struct f2fs_sb_info *sbi,
 	se = get_seg_entry(sbi, segno);
 	offset = OFFSET_IN_SEG(sbi, blkaddr);
 
-	if (f2fs_test_bit(offset, (char *)se->cur_valid_map)) {
-		ASSERT(0);
-		return -1;
-	}
-	if (f2fs_test_bit(offset, (char *)se->ckpt_valid_map)) {
-		ASSERT(0);
-		return -1;
-	}
+	if (f2fs_test_bit(offset, (char *)se->cur_valid_map))
+		return 1;
+
+	if (f2fs_test_bit(offset, (char *)se->ckpt_valid_map))
+		return 1;
 
 	if (!se->ckpt_valid_blocks)
 		se->ckpt_type = CURSEG_WARM_NODE;
@@ -3912,8 +3913,11 @@ static int traverse_dnodes(struct f2fs_sb_info *sbi,
 			goto next;
 
 		err = do_record_fsync_data(sbi, node_blk, blkaddr);
-		if (err)
+		if (err) {
+			if (err > 0)
+				err = 0;
 			break;
+		}
 
 		if (entry->blkaddr == blkaddr)
 			del_fsync_inode(entry);
@@ -3965,20 +3969,22 @@ int f2fs_do_mount(struct f2fs_sb_info *sbi)
 	sbi->active_logs = NR_CURSEG_TYPE;
 	ret = validate_super_block(sbi, SB0_ADDR);
 	if (ret) {
-		/* Assuming 4K Block Size */
-		c.blksize_bits = 12;
-		c.blksize = 1 << c.blksize_bits;
-		MSG(0, "Looking for secondary superblock assuming 4K Block Size\n");
+		if (!c.sparse_mode) {
+			/* Assuming 4K Block Size */
+			c.blksize_bits = 12;
+			c.blksize = 1 << c.blksize_bits;
+			MSG(0, "Looking for secondary superblock assuming 4K Block Size\n");
+		}
 		ret = validate_super_block(sbi, SB1_ADDR);
-		if (ret) {
+		if (ret && !c.sparse_mode) {
 			/* Trying 16K Block Size */
 			c.blksize_bits = 14;
 			c.blksize = 1 << c.blksize_bits;
 			MSG(0, "Looking for secondary superblock assuming 16K Block Size\n");
 			ret = validate_super_block(sbi, SB1_ADDR);
-			if (ret)
-				return -1;
 		}
+		if (ret)
+			return -1;
 	}
 	sb = F2FS_RAW_SUPER(sbi);
 	c.cache_config.num_cache_entry = num_cache_entry;
