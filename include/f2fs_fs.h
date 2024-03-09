@@ -718,6 +718,7 @@ enum stop_cp_reason {
 	STOP_CP_REASON_CORRUPTED_SUMMARY,
 	STOP_CP_REASON_UPDATE_INODE,
 	STOP_CP_REASON_FLUSH_FAIL,
+	STOP_CP_REASON_NO_SEGMENT,
 	STOP_CP_REASON_MAX,
 };
 
@@ -1475,7 +1476,6 @@ struct f2fs_configuration {
 	char *vol_uuid;
 	uint16_t s_encoding;
 	uint16_t s_encoding_flags;
-	int heap;
 	int32_t kd;
 	int32_t dump_fd;
 	struct device_info devices[MAX_DEVICES];
