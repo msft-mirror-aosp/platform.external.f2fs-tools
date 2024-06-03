@@ -8,13 +8,13 @@ third_party {
   license_type: RESTRICTED
   last_upgrade_date {
     year: 2024
-    month: 3
-    day: 7
+    month: 5
+    day: 24
   }
   homepage: "https://git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs-tools.git/"
   identifier {
     type: "Git"
     value: "https://git.kernel.org/pub/scm/linux/kernel/git/jaegeuk/f2fs-tools.git"
-    version: "efcff4bc169fbcb7276769ab0ad5444b1df33a70"
+    version: "c1a97862b05d8a736ad8719939395c61bd71c982"
   }
 }
