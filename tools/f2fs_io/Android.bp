@@ -1,7 +1,8 @@
 cc_defaults {
     name: "f2fs-io-defaults",
     cflags: [
-        "-Wno-unused-function"
+        "-D_FILE_OFFSET_BITS=64",
+        "-Wno-unused-function",
     ],
 }
 
