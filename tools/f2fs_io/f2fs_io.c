@@ -209,7 +209,7 @@ static void do_set_verity(int argc, char **argv, const struct cmd_desc *cmd)
 	struct fsverity_enable_arg args = {.version = 1};
 
 	args.hash_algorithm = FS_VERITY_HASH_ALG_SHA256;
-	args.block_size = 4096;
+	args.block_size = F2FS_DEFAULT_BLKSIZE;
 
 	if (argc != 2) {
 		fputs("Excess arguments\n\n", stderr);
@@ -659,11 +659,11 @@ static void do_write_with_advice(int argc, char **argv,
 	if (bs > 1024)
 		die("Too big chunk size - limit: 4MB");
 
-	buf_size = bs * 4096;
+	buf_size = bs * F2FS_DEFAULT_BLKSIZE;
 
 	offset = atoi(argv[2]) * buf_size;
 
-	buf = aligned_xalloc(4096, buf_size);
+	buf = aligned_xalloc(F2FS_DEFAULT_BLKSIZE, buf_size);
 	count = atoi(argv[3]);
 
 	if (!strcmp(argv[4], "zero"))
@@ -874,11 +874,11 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 	bs = atoi(argv[1]);
 	if (bs > 1024)
 		die("Too big chunk size - limit: 4MB");
-	buf_size = bs * 4096;
+	buf_size = bs * F2FS_DEFAULT_BLKSIZE;
 
 	offset = atoi(argv[2]) * buf_size;
 
-	buf = aligned_xalloc(4096, buf_size);
+	buf = aligned_xalloc(F2FS_DEFAULT_BLKSIZE, buf_size);
 
 	count = atoi(argv[3]);
 	if (!strcmp(argv[4], "dio"))
@@ -898,9 +898,11 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 
 	advice = atoi(argv[5]);
 	if (advice) {
-		if (posix_fadvise(fd, 0, 4096, POSIX_FADV_SEQUENTIAL) != 0)
+		if (posix_fadvise(fd, 0, F2FS_DEFAULT_BLKSIZE,
+				POSIX_FADV_SEQUENTIAL) != 0)
 			die_errno("fadvise failed");
-		if (posix_fadvise(fd, 0, 4096, POSIX_FADV_WILLNEED) != 0)
+		if (posix_fadvise(fd, 0, F2FS_DEFAULT_BLKSIZE,
+				POSIX_FADV_WILLNEED) != 0)
 			die_errno("fadvise failed");
 		printf("fadvise SEQUENTIAL|WILLNEED to a file: %s\n", argv[7]);
 	}
@@ -976,9 +978,9 @@ static void do_randread(int argc, char **argv, const struct cmd_desc *cmd)
 	bs = atoi(argv[1]);
 	if (bs > 1024)
 		die("Too big chunk size - limit: 4MB");
-	buf_size = bs * 4096;
+	buf_size = bs * F2FS_DEFAULT_BLKSIZE;
 
-	buf = aligned_xalloc(4096, buf_size);
+	buf = aligned_xalloc(F2FS_DEFAULT_BLKSIZE, buf_size);
 
 	count = atoi(argv[2]);
 	if (!strcmp(argv[3], "dio"))
@@ -991,17 +993,17 @@ static void do_randread(int argc, char **argv, const struct cmd_desc *cmd)
 	if (fstat(fd, &stbuf) != 0)
 		die_errno("fstat of source file failed");
 
-	aligned_size = (u64)stbuf.st_size & ~((u64)(4096 - 1));
+	aligned_size = (u64)stbuf.st_size & ~((u64)(F2FS_DEFAULT_BLKSIZE - 1));
 	if (aligned_size < buf_size)
 		die("File is too small to random read");
-	end_idx = (u64)(aligned_size - buf_size) / (u64)4096 + 1;
+	end_idx = (u64)(aligned_size - buf_size) / (u64)F2FS_DEFAULT_BLKSIZE + 1;
 
 	srand((unsigned) time(&t));
 
 	for (i = 0; i < count; i++) {
 		idx = rand() % end_idx;
 
-		ret = pread(fd, buf, buf_size, 4096 * idx);
+		ret = pread(fd, buf, buf_size, F2FS_DEFAULT_BLKSIZE * idx);
 		if (ret != buf_size)
 			break;
 
@@ -1031,15 +1033,16 @@ static void do_fiemap(int argc, char **argv, const struct cmd_desc *cmd)
 	}
 
 	memset(fm, 0, sizeof(struct fiemap));
-	start = (u64)atoi(argv[1]) * F2FS_BLKSIZE;
-	length = (u64)atoi(argv[2]) * F2FS_BLKSIZE;
+	start = (u64)atoi(argv[1]) * F2FS_DEFAULT_BLKSIZE;
+	length = (u64)atoi(argv[2]) * F2FS_DEFAULT_BLKSIZE;
 	fm->fm_start = start;
 	fm->fm_length = length;
 
 	fd = xopen(argv[3], O_RDONLY | O_LARGEFILE, 0);
 
 	printf("Fiemap: offset = %"PRIu64" len = %"PRIu64"\n",
-				start / F2FS_BLKSIZE, length / F2FS_BLKSIZE);
+				start / F2FS_DEFAULT_BLKSIZE,
+				length / F2FS_DEFAULT_BLKSIZE);
 	if (ioctl(fd, FS_IOC_FIEMAP, fm) < 0)
 		die_errno("FIEMAP failed");
 
@@ -1219,9 +1222,9 @@ static void do_copy(int argc, char **argv, const struct cmd_desc *cmd)
 		if (ret < 0)
 			die_errno("sendfile failed");
 	} else {
-		char *buf = aligned_xalloc(4096, 4096);
+		char *buf = aligned_xalloc(F2FS_DEFAULT_BLKSIZE, F2FS_DEFAULT_BLKSIZE);
 
-		while ((ret = xread(src_fd, buf, 4096)) > 0)
+		while ((ret = xread(src_fd, buf, F2FS_DEFAULT_BLKSIZE)) > 0)
 			full_write(dst_fd, buf, ret);
 		free(buf);
 	}
