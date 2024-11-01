@@ -872,8 +872,8 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 	}
 
 	bs = atoi(argv[1]);
-	if (bs > 1024)
-		die("Too big chunk size - limit: 4MB");
+	if (bs > 256 * 1024)
+		die("Too big chunk size - limit: 1GB");
 	buf_size = bs * F2FS_DEFAULT_BLKSIZE;
 
 	offset = atoi(argv[2]) * buf_size;
