@@ -952,24 +952,31 @@ static void do_read(int argc, char **argv, const struct cmd_desc *cmd)
 
 #define randread_desc "random read data from file"
 #define randread_help					\
-"f2fs_io randread [chunk_size in 4kb] [count] [IO] [file_path]\n\n"	\
+"f2fs_io randread [chunk_size in 4kb] [count] [IO] [advise] [file_path]\n\n"	\
 "Do random read data in file_path\n"		\
 "IO can be\n"						\
 "  buffered : buffered IO\n"				\
 "  dio      : direct IO\n"				\
+"  mmap     : mmap IO\n"				\
+"advice can be\n"					\
+" 1 : set random|willneed\n"				\
+" 0 : none\n"						\
 
 static void do_randread(int argc, char **argv, const struct cmd_desc *cmd)
 {
 	u64 buf_size = 0, ret = 0, read_cnt = 0;
 	u64 idx, end_idx, aligned_size;
 	char *buf = NULL;
-	unsigned bs, count, i;
+	char *data;
+	unsigned bs, count, i, j;
+	u64 total_time = 0, elapsed_time = 0;
 	int flags = 0;
-	int fd;
+	int do_mmap = 0;
+	int fd, advice;
 	time_t t;
 	struct stat stbuf;
 
-	if (argc != 5) {
+	if (argc != 6) {
 		fputs("Excess arguments\n\n", stderr);
 		fputs(cmd->cmd_help, stderr);
 		exit(1);
@@ -985,10 +992,21 @@ static void do_randread(int argc, char **argv, const struct cmd_desc *cmd)
 	count = atoi(argv[2]);
 	if (!strcmp(argv[3], "dio"))
 		flags |= O_DIRECT;
+	else if (!strcmp(argv[3], "mmap"))
+		do_mmap = 1;
 	else if (strcmp(argv[3], "buffered"))
 		die("Wrong IO type");
 
-	fd = xopen(argv[4], O_RDONLY | flags, 0);
+	fd = xopen(argv[5], O_RDONLY | flags, 0);
+
+	advice = atoi(argv[4]);
+	if (advice) {
+		if (posix_fadvise(fd, 0, stbuf.st_size, POSIX_FADV_RANDOM) != 0)
+			die_errno("fadvise failed");
+		if (posix_fadvise(fd, 0, 4096, POSIX_FADV_WILLNEED) != 0)
+			die_errno("fadvise failed");
+		printf("fadvise RANDOM|WILLNEED to a file: %s\n", argv[5]);
+	}
 
 	if (fstat(fd, &stbuf) != 0)
 		die_errno("fstat of source file failed");
@@ -998,18 +1016,38 @@ static void do_randread(int argc, char **argv, const struct cmd_desc *cmd)
 		die("File is too small to random read");
 	end_idx = (u64)(aligned_size - buf_size) / (u64)F2FS_DEFAULT_BLKSIZE + 1;
 
+	if (do_mmap) {
+		data = mmap(NULL, stbuf.st_size, PROT_READ, MAP_SHARED, fd, 0);
+		if (data == MAP_FAILED)
+			die("Mmap failed");
+		if (madvise((void *)data, stbuf.st_size, MADV_RANDOM) != 0)
+			die_errno("madvise failed");
+	}
+
 	srand((unsigned) time(&t));
+
+	total_time = get_current_us();
 
 	for (i = 0; i < count; i++) {
 		idx = rand() % end_idx;
 
-		ret = pread(fd, buf, buf_size, F2FS_DEFAULT_BLKSIZE * idx);
-		if (ret != buf_size)
-			break;
-
-		read_cnt += ret;
+		if (!do_mmap) {
+			ret = pread(fd, buf, buf_size, 4096 * idx);
+			if (ret != buf_size)
+				break;
+		} else {
+			for (j = 0; j < bs; j++)
+				*buf = data[4096 * (idx + j)];
+		}
+		read_cnt += buf_size;
 	}
-	printf("Read %"PRIu64" bytes\n", read_cnt);
+	elapsed_time = get_current_us() - total_time;
+
+	printf("Read %"PRIu64" bytes total_time = %"PRIu64" us, avg. latency = %.Lf us, IOPs= %.Lf, BW = %.Lf MB/s\n",
+		read_cnt, elapsed_time,
+		(long double)elapsed_time / count,
+		(long double)count * 1000 * 1000 / elapsed_time,
+		(long double)read_cnt / elapsed_time);
 	exit(0);
 }
 
