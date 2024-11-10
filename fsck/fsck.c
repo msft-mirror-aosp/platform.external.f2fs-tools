@@ -1340,7 +1340,6 @@ skip_blkcnt_fix:
 					nid, child.dot, child.dotdot);
 			if (c.fix_on) {
 				umode_t mode = le16_to_cpu(node_blk->i.i_mode);
-				block_t blkaddr;
 
 				ret = convert_inline_dentry(sbi, node_blk,
 								&ni->blk_addr);
@@ -1355,7 +1354,7 @@ skip_blkcnt_fix:
 					ret = f2fs_add_link(sbi, node_blk,
 						(const unsigned char *)name,
 						1, nid, map_de_type(mode),
-						&blkaddr, 0);
+						&ni->blk_addr, 0);
 					FIX_MSG("add missing '%s' dirent in ino: %u, pino: %u, ret:%d",
 						name, nid, child_d->p_ino, ret);
 					if (ret)
@@ -1369,7 +1368,7 @@ skip_blkcnt_fix:
 						(const unsigned char *)name,
 						2, child_d->p_ino,
 						map_de_type(mode),
-						&blkaddr, 0);
+						&ni->blk_addr, 0);
 					FIX_MSG("add missing '%s' dirent in ino: %u, pino: %u, ret:%d",
 						name, nid, child_d->p_ino, ret);
 					if (ret)
