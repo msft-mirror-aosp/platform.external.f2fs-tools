@@ -1748,8 +1748,7 @@ static int f2fs_write_alias_inodes(void)
 		dev_off++;
 		f2fs_init_inode(sb, raw_node, ino, mkfs_time, 0x81c0);
 
-		raw_node->i.i_flags = cpu_to_le32(F2FS_IMMUTABLE_FL |
-				F2FS_DEVICE_ALIAS_FL);
+		raw_node->i.i_flags = cpu_to_le32(F2FS_DEVICE_ALIAS_FL);
 		raw_node->i.i_inline = F2FS_PIN_FILE;
 		raw_node->i.i_pino = sb->root_ino;
 		filename = c.devices[i].alias_filename;
