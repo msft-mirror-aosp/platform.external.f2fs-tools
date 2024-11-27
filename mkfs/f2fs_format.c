@@ -266,6 +266,7 @@ static int f2fs_prepare_super_block(void)
 	uint32_t log_sectorsize, log_sectors_per_block;
 	uint32_t log_blocksize, log_blks_per_seg;
 	uint32_t segment_size_bytes, zone_size_bytes;
+	uint32_t alignment_bytes;
 	uint32_t sit_segments, nat_segments;
 	uint32_t blocks_for_sit, blocks_for_nat, blocks_for_ssa;
 	uint32_t total_valid_blks_available;
@@ -305,10 +306,12 @@ static int f2fs_prepare_super_block(void)
 
 	set_sb(block_count, c.total_sectors >> log_sectors_per_block);
 
+	alignment_bytes = c.zoned_mode && c.ndevs > 1 ? segment_size_bytes : zone_size_bytes;
+
 	zone_align_start_offset =
 		((uint64_t) c.start_sector * DEFAULT_SECTOR_SIZE +
-		2 * F2FS_BLKSIZE + zone_size_bytes - 1) /
-		zone_size_bytes * zone_size_bytes -
+		2 * F2FS_BLKSIZE + alignment_bytes  - 1) /
+		alignment_bytes  * alignment_bytes  -
 		(uint64_t) c.start_sector * DEFAULT_SECTOR_SIZE;
 
 	if (c.feature & F2FS_FEATURE_RO)
@@ -327,7 +330,8 @@ static int f2fs_prepare_super_block(void)
 
 	if (c.zoned_mode && c.ndevs > 1)
 		zone_align_start_offset +=
-			(c.devices[0].total_sectors * c.sector_size) % zone_size_bytes;
+			(c.devices[0].total_sectors * c.sector_size -
+			 zone_align_start_offset) % zone_size_bytes;
 
 	set_sb(segment0_blkaddr, zone_align_start_offset / blk_size_bytes);
 	sb->cp_blkaddr = sb->segment0_blkaddr;
@@ -1744,8 +1748,7 @@ static int f2fs_write_alias_inodes(void)
 		dev_off++;
 		f2fs_init_inode(sb, raw_node, ino, mkfs_time, 0x81c0);
 
-		raw_node->i.i_flags = cpu_to_le32(F2FS_IMMUTABLE_FL |
-				F2FS_DEVICE_ALIAS_FL);
+		raw_node->i.i_flags = cpu_to_le32(F2FS_DEVICE_ALIAS_FL);
 		raw_node->i.i_inline = F2FS_PIN_FILE;
 		raw_node->i.i_pino = sb->root_ino;
 		filename = c.devices[i].alias_filename;
