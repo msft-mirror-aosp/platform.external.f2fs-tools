@@ -209,24 +209,69 @@ cc_binary_host {
     stl: "libc++_static",
 }
 
-cc_binary {
-    name: "fsck.f2fs",
+cc_defaults {
+    name: "fsck.f2fs_defaults",
     defaults: [
         "f2fs-tools-defaults",
         "fsck_main_src_files",
     ],
-    host_supported: true,
-    vendor_available: true,
-    recovery_available: true,
     cflags: ["-DWITH_RESIZE", "-DWITH_DEFRAG", "-DWITH_DUMP"],
     srcs: ["fsck/fsck.c", "fsck/resize.c", "fsck/defrag.c"],
+}
+
+cc_defaults {
+    name: "fsck.f2fs_partition_common_defaults",
+    defaults: [
+        "f2fs-tools-defaults",
+        "fsck_main_src_files",
+        "fsck.f2fs_defaults",
+    ],
+    symlinks: ["resize.f2fs", "defrag.f2fs", "dump.f2fs"],
     shared_libs: [
         "libext2_uuid",
         "libsparse",
         "libbase",
     ],
-    symlinks: ["resize.f2fs", "defrag.f2fs", "dump.f2fs"],
+    bootstrap: true,
+}
+
+cc_binary {
+    name: "fsck.f2fs",
+    defaults: [
+        "fsck.f2fs_partition_common_defaults",
+    ],
+    host_supported: true,
+    vendor_available: true,
     vendor_ramdisk_available: true,
+    bootstrap: true,
+}
+
+cc_binary {
+    name: "fsck.f2fs.recovery",
+    defaults: [
+        "fsck.f2fs_partition_common_defaults",
+    ],
+    recovery: true,
+    bootstrap: true,
+    stem: "fsck.f2fs",
+}
+
+cc_binary {
+    name: "fsck.f2fs_ramdisk",
+    stem: "fsck.f2fs",
+    defaults: [
+        "f2fs-tools-defaults",
+        "fsck_main_src_files",
+        "fsck.f2fs_defaults",
+    ],
+    static_executable: true,
+    ramdisk: true,
+    static_libs: [
+        "libbase",
+        "libext2_uuid",
+        "libsparse",
+        "libz",
+    ],
 }
 
 cc_binary {
