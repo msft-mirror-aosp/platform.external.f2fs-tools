@@ -441,7 +441,10 @@ static void do_shutdown(int argc, char **argv, const struct cmd_desc *cmd)
 "fadvice given the file\n"					\
 "advice can be\n"						\
 " willneed\n"							\
+" dontneed\n"							\
+" noreuse\n"							\
 " sequential\n"							\
+" random\n"							\
 
 static void do_fadvise(int argc, char **argv, const struct cmd_desc *cmd)
 {
@@ -458,8 +461,14 @@ static void do_fadvise(int argc, char **argv, const struct cmd_desc *cmd)
 
 	if (!strcmp(argv[1], "willneed")) {
 		advice = POSIX_FADV_WILLNEED;
+	} else if (!strcmp(argv[1], "dontneed")) {
+		advice = POSIX_FADV_DONTNEED;
+	} else if (!strcmp(argv[1], "noreuse")) {
+		advice = POSIX_FADV_NOREUSE;
 	} else if (!strcmp(argv[1], "sequential")) {
 		advice = POSIX_FADV_SEQUENTIAL;
+	} else if (!strcmp(argv[1], "random")) {
+		advice = POSIX_FADV_RANDOM;
 	} else {
 		fputs("Wrong advice\n\n", stderr);
 		fputs(cmd->cmd_help, stderr);
