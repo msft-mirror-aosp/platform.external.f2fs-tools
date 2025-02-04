@@ -485,6 +485,40 @@ static void do_fadvise(int argc, char **argv, const struct cmd_desc *cmd)
 	exit(0);
 }
 
+#define ioprio_desc "ioprio"
+#define ioprio_help						\
+"f2fs_io ioprio [hint] [file]\n\n"				\
+"ioprio given the file\n"					\
+"hint can be\n"							\
+" ioprio_write\n"						\
+
+static void do_ioprio(int argc, char **argv, const struct cmd_desc *cmd)
+{
+	int fd, hint;
+
+	if (argc != 3) {
+		fputs("Excess arguments\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	fd = xopen(argv[2], O_RDWR, 0);
+
+	if (!strcmp(argv[1], "ioprio_write")) {
+		hint = F2FS_IOPRIO_WRITE;
+	} else {
+		fputs("Not supported hint\n\n", stderr);
+		fputs(cmd->cmd_help, stderr);
+		exit(1);
+	}
+
+	if (ioctl(fd, F2FS_IOC_IO_PRIO, &hint) != 0)
+		die_errno("ioprio failed");
+
+	printf("ioprio_hint %d to a file: %s\n", hint, argv[2]);
+	exit(0);
+}
+
 #define pinfile_desc "pin file control"
 #define pinfile_help						\
 "f2fs_io pinfile [get|set|unset] [file] {size}\n\n"		\
@@ -1953,6 +1987,7 @@ const struct cmd_desc cmd_list[] = {
 	CMD(removexattr),
 	CMD(lseek),
 	CMD(get_advise),
+	CMD(ioprio),
 	{ NULL, NULL, NULL, NULL, 0 }
 };
 
