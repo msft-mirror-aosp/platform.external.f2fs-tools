@@ -478,21 +478,22 @@ static void do_fadvise(int argc, char **argv, const struct cmd_desc *cmd)
 
 #define pinfile_desc "pin file control"
 #define pinfile_help						\
-"f2fs_io pinfile [get|set|unset] [file]\n\n"			\
-"get/set pinning given the file\n"				\
+"f2fs_io pinfile [get|set|unset] [file] {size}\n\n"		\
+"get/set/unset pinning given the file\n"			\
+"{size} is fallocate length and optional only for set operations\n"
 
 static void do_pinfile(int argc, char **argv, const struct cmd_desc *cmd)
 {
 	u32 pin;
 	int ret, fd;
 
-	if (argc != 3) {
+	if (argc < 3 || argc > 4) {
 		fputs("Excess arguments\n\n", stderr);
 		fputs(cmd->cmd_help, stderr);
 		exit(1);
 	}
 
-	fd = xopen(argv[2], O_RDONLY, 0);
+	fd = xopen(argv[2], O_RDWR, 0);
 
 	ret = -1;
 	if (!strcmp(argv[1], "set")) {
@@ -500,8 +501,19 @@ static void do_pinfile(int argc, char **argv, const struct cmd_desc *cmd)
 		ret = ioctl(fd, F2FS_IOC_SET_PIN_FILE, &pin);
 		if (ret != 0)
 			die_errno("F2FS_IOC_SET_PIN_FILE failed");
-		printf("%s pinfile: %u blocks moved in %s\n",
-					argv[1], ret, argv[2]);
+		if (argc != 4) {
+			printf("%s pinfile: %u blocks moved in %s\n",
+						argv[1], ret, argv[2]);
+			exit(0);
+		}
+
+		struct stat st;
+		if (fallocate(fd, 0, 0, atoll(argv[3])) != 0)
+			die_errno("fallocate failed");
+		if (fstat(fd, &st) != 0)
+			die_errno("fstat failed");
+		printf("%s pinfile: %u blocks moved and fallocate %"PRIu64" bytes in %s\n",
+					argv[1], ret, st.st_size, argv[2]);
 	} else if (!strcmp(argv[1], "unset")) {
 		pin = 0;
 		ret = ioctl(fd, F2FS_IOC_SET_PIN_FILE, &pin);
