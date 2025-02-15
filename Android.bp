@@ -191,6 +191,16 @@ cc_binary {
     defaults: [
         "make_f2fs_host_defaults",
     ],
+    target: {
+        host: {
+            dist: {
+                targets: [
+                    "dist_files",
+                    "sdk",
+                ],
+            },
+        },
+    },
 }
 
 cc_binary {
@@ -211,6 +221,12 @@ cc_binary_host {
     target: {
         host: {
             cflags: ["-DCONF_CASEFOLD", "-DCONF_PROJID"],
+            dist: {
+                targets: [
+                    "dist_files",
+                    "sdk",
+                ],
+            },
         },
         windows: {
             cflags: ["-DCONF_CASEFOLD", "-DCONF_PROJID"],
