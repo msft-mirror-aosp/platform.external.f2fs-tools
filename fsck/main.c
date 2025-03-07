@@ -226,6 +226,9 @@ static void add_default_options(void)
 	switch (c.defset) {
 	case CONF_ANDROID:
 		__add_fsck_options();
+
+		/* disable nat_bits feature by default */
+		c.disabled_feature |= F2FS_FEATURE_NAT_BITS;
 	}
 	c.quota_fix = 1;
 }
