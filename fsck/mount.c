@@ -774,6 +774,7 @@ static char *errors_str[] = {
 	[ERROR_CORRUPTED_XATTR]			= "corrupted_xattr",
 	[ERROR_INVALID_NODE_REFERENCE]		= "invalid_node_reference",
 	[ERROR_INCONSISTENT_NAT]		= "inconsistent_nat",
+	[ERROR_INCONSISTENT_ORPHAN]		= "inconsistent_orphan",
 };
 
 void print_sb_errors(struct f2fs_super_block *sb)
