@@ -675,6 +675,14 @@ static void rewrite_nat_in_journal(struct f2fs_sb_info *sbi, u32 nid,
 		}
 	}
 
+	if (is_set_ckpt_flags(cp, CP_COMPACT_SUM_FLAG)) {
+		blkaddr = start_sum_block(sbi);
+		ret = dev_write(&journal->n_nats, blkaddr << F2FS_BLKSIZE_BITS,
+				SUM_JOURNAL_SIZE, WRITE_LIFE_NONE);
+		ASSERT(ret >= 0);
+		return;
+	}
+
 	if (is_set_ckpt_flags(cp, CP_UMOUNT_FLAG))
 		blkaddr = sum_blk_addr(sbi, NR_CURSEG_TYPE, CURSEG_HOT_DATA);
 	else
@@ -804,6 +812,14 @@ static void rewrite_sit_in_journal(struct f2fs_sb_info *sbi, unsigned int segno,
 			memcpy(&sit_in_journal(journal, i), sit, sizeof(*sit));
 			break;
 		}
+	}
+
+	if (is_set_ckpt_flags(cp, CP_COMPACT_SUM_FLAG)) {
+		blkaddr = start_sum_block(sbi);
+		ret = dev_write(&journal->n_sits, (blkaddr << F2FS_BLKSIZE_BITS) + SUM_JOURNAL_SIZE,
+				SUM_JOURNAL_SIZE, WRITE_LIFE_NONE);
+		ASSERT(ret >= 0);
+		return;
 	}
 
 	if (is_set_ckpt_flags(cp, CP_UMOUNT_FLAG))
