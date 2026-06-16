@@ -200,4 +200,6 @@ static inline int f2fs_acl_count(int size)
 			F2FS_TOTAL_EXTRA_ATTR_SIZE / sizeof(__le32) -	\
 			DEF_INLINE_RESERVED_SIZE -			\
 			MIN_INLINE_DENTRY_SIZE / sizeof(__le32))
+#define MIN_INLINE_XATTR_SIZE						\
+			(sizeof(struct f2fs_xattr_header) / sizeof(__le32))
 #endif

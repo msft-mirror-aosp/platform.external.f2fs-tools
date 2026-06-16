@@ -1063,14 +1063,16 @@ check_next:
 			}
 		}
 
-		if ((c.feature & F2FS_FEATURE_FLEXIBLE_INLINE_XATTR) &&
-			(node_blk->i.i_inline & F2FS_INLINE_XATTR)) {
+		if (c.feature & F2FS_FEATURE_FLEXIBLE_INLINE_XATTR) {
 			unsigned int inline_size =
 				le16_to_cpu(node_blk->i.i_inline_xattr_size);
 
 			if (time_to_inject(FAULT_INODE) ||
-					(!inline_size ||
-					inline_size > MAX_INLINE_XATTR_SIZE)) {
+					inline_size > MAX_INLINE_XATTR_SIZE ||
+					(inline_size != 0 &&
+					 inline_size < MIN_INLINE_XATTR_SIZE) ||
+					((node_blk->i.i_inline & F2FS_INLINE_XATTR) &&
+					 !inline_size)) {
 				ASSERT_MSG("[0x%x] wrong inline_xattr_size:%u",
 						nid, inline_size);
 				if (c.fix_on) {
