@@ -49,6 +49,9 @@ typedef u32	__be32;
 #endif
 
 #define F2FS_DEFAULT_BLKSIZE	4096
+#ifndef roundup
+#define roundup(x, y)		((((x) + ((y) - 1)) / (y)) * (y))
+#endif
 #define NEW_ADDR	0xFFFFFFFF
 
 #ifndef FS_IOC_GETFLAGS

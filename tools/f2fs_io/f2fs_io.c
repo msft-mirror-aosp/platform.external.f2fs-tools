@@ -97,6 +97,23 @@ static void *xmalloc(size_t size)
 
 static void *aligned_xalloc(size_t alignment, size_t size)
 {
+	long page_size = F2FS_DEFAULT_BLKSIZE;
+
+#ifdef _SC_PAGESIZE
+	page_size = sysconf(_SC_PAGESIZE);
+	if (page_size < 0)
+		page_size = F2FS_DEFAULT_BLKSIZE;
+#endif
+
+	/*
+	 * On systems with large page sizes (e.g., 16KB/64KB), alignment and
+	 * allocation size must be page-aligned to satisfy madvise().
+	 */
+	if (alignment < (size_t)page_size)
+		alignment = page_size;
+
+	size = roundup(size, alignment);
+
 	void *p = aligned_alloc(alignment, size);
 
 	if (!p)
