@@ -3025,6 +3025,94 @@ int check_sit_types(struct f2fs_sb_info *sbi)
 	}
 	return err;
 }
+enum type_fix   {
+	TYPE_DATA,		/* fix sit->type of empty node segment to data */
+	TYPE_NODE,		/* fix sit->type of empty data segment to node */
+	TYPE_DATA_TEMP,		/* fix inconsistent sit->type temperature of data segment */
+	TYPE_NODE_TEMP,		/* fix inconsistent sit->type temperature of node segment */
+	TYPE_MIGRATE,		/* migrate node segments in mixed section */
+};
+static bool fix_section_type(struct f2fs_sb_info *sbi, unsigned int secno,
+				unsigned char type, enum type_fix type_fix)
+{
+	unsigned int segno = secno * sbi->segs_per_sec;
+	unsigned int end_segno = segno + sbi->segs_per_sec;
+	unsigned int empty = 0;
+	bool fixed = false;
+
+	for (; segno < end_segno; segno++) {
+		struct seg_entry *se = get_seg_entry(sbi, segno);
+
+		if (type_fix == TYPE_DATA) {
+			if (se->valid_blocks)
+				continue;
+			DBG(1, "wrong sit->type (%d) in DATA secno:%d segno:%d\n",
+				se->type, secno, segno);
+			if (!c.fix_on)
+				continue;
+			FIX_MSG("Fix wrong sit->type (%d -> %d) in DATA secno (%u), segno (%d)",
+				se->type, type, secno, segno);
+			se->type = type;
+			empty++;
+			fixed = true;
+			continue;
+		}
+	}
+
+	if (fixed && type_fix == TYPE_DATA)
+		FIX_MSG("Fix wrong sit->type in DATA secno (%u), totally %d empty segment(s)",
+			secno, empty);
+
+	return fixed;
+}
+
+static bool check_large_section_types(struct f2fs_sb_info *sbi)
+{
+	unsigned int secno;
+	bool fixed = false;
+
+	if (sbi->segs_per_sec <= 1)
+		return 0;
+
+	for (secno = 0; secno < sbi->total_sections; secno++) {
+		struct seg_entry *se;
+		unsigned int segno = secno * sbi->segs_per_sec;
+		unsigned int end_segno = segno + sbi->segs_per_sec;
+		unsigned short data_seg = 0;
+		unsigned short node_seg = 0;
+		unsigned short empty_node_seg = 0;
+		unsigned char data_type = NO_CHECK_TYPE;
+
+		if (IS_CUR_SECNO(sbi, secno))
+			continue;
+
+		for (; segno < end_segno; segno++) {
+			se = get_seg_entry(sbi, segno);
+			if (IS_DATASEG(se->type)) {
+				if (se->valid_blocks) {
+					data_seg++;
+					data_type = se->type;
+				}
+			} else {
+				if (se->valid_blocks)
+					node_seg++;
+				else
+					empty_node_seg++;
+			}
+		}
+
+		/* skip free section */
+		if (!data_seg && !node_seg)
+			continue;
+
+		/* data section, fix sit->type of empty node segment to data */
+		if (data_seg && !node_seg && empty_node_seg) {
+			if (fix_section_type(sbi, secno, data_type, TYPE_DATA))
+				fixed = true;
+		}
+	}
+	return fixed;
+}
 
 static struct f2fs_node *fsck_get_lpf(struct f2fs_sb_info *sbi)
 {
@@ -3845,6 +3933,9 @@ int fsck_verify(struct f2fs_sb_info *sbi)
 
 	printf("[FSCK] fixing SIT types\n");
 	if (check_sit_types(sbi) != 0)
+		force = 1;
+
+	if (check_large_section_types(sbi))
 		force = 1;
 
 	printf("[FSCK] other corrupted bugs                          ");
