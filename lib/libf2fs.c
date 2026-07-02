@@ -1016,8 +1016,9 @@ int get_device_info(int i)
 	}
 
 	dev->fd = fd;
+#ifdef BLKFLSBUF
 	ioctl(fd, BLKFLSBUF);
-
+#endif
 	if (c.sparse_mode && i == 0) {
 		if (f2fs_init_sparse_file()) {
 			free(stat_buf);
